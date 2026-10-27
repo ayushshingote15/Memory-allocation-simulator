@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Memory Allocation Simulator - SLA 3</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Arial, sans-serif;
+      background: #f3f6fb;
+      color: #1f2937;
+    }
+    header {
+      background: #173b70;
+      color: white;
+      text-align: center;
+      padding: 24px 16px;
+    }
+    header h1 { margin: 0 0 8px; font-size: 28px; }
+    header p { margin: 0; }
+    main { max-width: 1050px; margin: 24px auto; padding: 0 16px; }
+    .panel {
+      background: white;
+      padding: 20px;
+      border-radius: 12px;
+      margin-bottom: 18px;
+      box-shadow: 0 3px 12px rgba(0,0,0,.07);
+    }
+    label { display: block; font-weight: bold; margin: 12px 0 6px; }
+    input {
+      width: 100%;
+      padding: 11px;
+      border: 1px solid #cbd5e1;
+      border-radius: 7px;
+      font-size: 16px;
+    }
+    .buttons { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 16px; }
+    button {
+      border: 0;
+      border-radius: 7px;
+      padding: 11px 15px;
+      cursor: pointer;
+      color: white;
+      background: #1d5ca8;
+      font-weight: bold;
+    }
+    button:hover { filter: brightness(.92); }
+    button.secondary { background: #475569; }
+    #message { margin-top: 12px; color: #b91c1c; font-weight: bold; }
+    .results-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 14px;
+    }
+    .result-card {
+      border: 1px solid #dbe3ef;
+      border-radius: 10px;
+      padding: 15px;
+      overflow-wrap: anywhere;
+    }
+    .result-card h3 { margin-top: 0; color: #173b70; }
+    .metrics { font-size: 14px; line-height: 1.7; }
+    table { width: 100%; border-collapse: collapse; margin-top: 12px; font-size: 14px; }
+    th, td { border: 1px solid #dbe3ef; padding: 8px; text-align: left; }
+    th { background: #eaf1fb; }
+    .note { color: #475569; font-size: 14px; line-height: 1.5; }
+    footer { text-align: center; color: #64748b; padding: 20px; font-size: 13px; }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>Memory Allocation Simulator</h1>
+    <p>SLA 3 · First Fit, Best Fit, Worst Fit and Q-learning</p>
+  </header>
+
+  <main>
+    <section class="panel">
+      <h2>Enter Input</h2>
+      <label for="blocks">Memory blocks (KB, comma-separated)</label>
+      <input id="blocks" value="100, 500, 200, 300, 600">
+      <label for="processes">Process requirements (KB, comma-separated)</label>
+      <input id="processes" value="212, 417, 112, 426">
+      <div class="buttons">
+        <button onclick="runAll()">Compare All Algorithms</button>
+        <button class="secondary" onclick="resetInputs()">Reset</button>
+      </div>
+      <div id="message"></div>
+    </section>
+
+    <section class="panel">
+      <h2>Results</h2>
+      <div id="results" class="results-grid">
+        <p class="note">Enter your values and click “Compare All Algorithms”.</p>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2>How the Q-learning demo works</h2>
+      <p class="note">
+        The simulator trains a small Q-learning strategy selector on generated memory workloads.
+        Its possible actions are First Fit, Best Fit and Worst Fit. The reward favours successful
+        allocations and applies a small penalty to unsuccessful requests. The learned policy is then
+        tested on the same input as the traditional algorithms. This is an educational demonstration,
+        not a production operating-system memory manager; its results are not guaranteed to be better.
+      </p>
+    </section>
+  </main>
+
+  <footer>Operating Systems Self-Learning Activity · Third Review</footer>
+
+<script>
+const ACTIONS = ["First Fit", "Best Fit", "Worst Fit"];
+
+function parseValues(id) {
+  const raw = document.getElementById(id).value.trim();
+  if (!raw) throw new Error("Please fill in both input fields.");
+  const values = raw.split(",").map(v => Number(v.trim()));
+  if (values.some(v => !Number.isFinite(v) || v <= 0)) {
+    throw new Error("Enter only positive numbers separated by commas.");
+  }
+  return values;
+}
+
+function allocateOne(freeBlocks, request, strategy) {
+  const candidates = [];
+  let searched = 0;
+
+  for (let i = 0; i < freeBlocks.length; i++) {
+    searched++;
+    if (freeBlocks[i] >= request) candidates.push(i);
+  }
+  if (candidates.length === 0) {
+    return { blocks: [...freeBlocks], success: false, searched, chosen: null, remainder: null };
+  }
+
+  let chosenIndex;
+  if (strategy === "First Fit") {
+    chosenIndex = candidates[0];
+  } else if (strategy === "Best Fit") {
+    chosenIndex = candidates.reduce((best, i) =>
+      freeBlocks[i] < freeBlocks[best] ? i : best, candidates[0]);
+  } else {
+    chosenIndex = candidates.reduce((best, i) =>
+      freeBlocks[i] > freeBlocks[best] ? i : best, candidates[0]);
+  }
+
+  const chosen = freeBlocks[chosenIndex];
+  const remainder = chosen - request;
+  const updated = [...freeBlocks];
+  updated.splice(chosenIndex, 1);
+  if (remainder > 0) updated.push(remainder);
+
+  return { blocks: updated, success: true, searched, chosen, remainder };
+}
+
+function runTraditional(initialBlocks, processes, strategy) {
+  let freeBlocks = [...initialBlocks];
+  let allocated = 0, failed = 0, searches = 0;
+  const rows = [];
+
+  processes.forEach((request, index) => {
+    const result = allocateOne(freeBlocks, request, strategy);
+    freeBlocks = result.blocks;
+    searches += result.searched;
+    if (result.success) allocated++; else failed++;
+    rows.push({
+      process: "P" + (index + 1),
+      request,
+      status: result.success ? "Allocated" : "Not Allocated",
+      chosen: result.success ? result.chosen : "—",
+      remainder: result.success ? result.remainder : "—"
+    });
+  });
+
+  return makeSummary(strategy, rows, freeBlocks, allocated, failed, searches);
+}
+
+function makeSummary(name, rows, freeBlocks, allocated, failed, searches) {
+  const totalFree = freeBlocks.reduce((a, b) => a + b, 0);
+  const largest = Math.max(0, ...freeBlocks);
+  return {
+    name, rows, freeBlocks, allocated, failed, searches,
+    totalFree, largest, fragmentation: Math.max(0, totalFree - largest)
+  };
+}
+
+// Compact state features for a small tabular Q-learning example.
+function getState(blocks, request) {
+  const total = blocks.reduce((a, b) => a + b, 0);
+  const largest = Math.max(0, ...blocks);
+  const countBucket = blocks.length <= 2 ? 0 : blocks.length <= 5 ? 1 : 2;
+  const ratio = total > 0 ? request / total : 1;
+  const requestBucket = ratio <= .25 ? 0 : ratio <= .5 ? 1 : ratio <= .8 ? 2 : 3;
+  const largestRatio = total > 0 ? largest / total : 0;
+  const largestBucket = largestRatio < .25 ? 0 : largestRatio < .5 ? 1 : 2;
+  return [countBucket, requestBucket, largestBucket].join("|");
+}
+
+function trainQLearning(episodes = 700) {
+  const q = {};
+  const alpha = 0.15, gamma = 0.8, epsilon = 0.25;
+
+  function values(state) {
+    if (!q[state]) q[state] = [0, 0, 0];
+    return q[state];
+  }
+
+  for (let episode = 0; episode < episodes; episode++) {
+    let blocks = Array.from({length: 3 + Math.floor(Math.random() * 5)},
+      () => 100 + Math.floor(Math.random() * 701));
+    const processes = Array.from({length: 4 + Math.floor(Math.random() * 5)},
+      () => 50 + Math.floor(Math.random() * 451));
+
+    for (const request of processes) {
+      const state = getState(blocks, request);
+      let action;
+      if (Math.random() < epsilon) {
+        action = Math.floor(Math.random() * ACTIONS.length);
+      } else {
+        const vals = values(state);
+        action = vals.indexOf(Math.max(...vals));
+      }
+
+      const before = blocks.reduce((a, b) => a + b, 0);
+      const result = allocateOne(blocks, request, ACTIONS[action]);
+      const reward = result.success
+        ? 10 - 2 * (before > 0 ? result.remainder / before : 0)
+        : -10;
+
+      const nextState = getState(result.blocks, request);
+      const current = values(state)[action];
+      const future = Math.max(...values(nextState));
+      values(state)[action] = current + alpha * (reward + gamma * future - current);
+      blocks = result.blocks;
+    }
+  }
+  return q;
+}
+
+function runLearned(initialBlocks, processes, q) {
+  let blocks = [...initialBlocks];
+  let allocated = 0, failed = 0, searches = 0;
+  const rows = [];
+
+  processes.forEach((request, index) => {
+    const state = getState(blocks, request);
+    const vals = q[state] || [0, 0, 0];
+    const action = vals.indexOf(Math.max(...vals));
+    const strategy = ACTIONS[action];
+    const result = allocateOne(blocks, request, strategy);
+    blocks = result.blocks;
+    searches += result.searched;
+    if (result.success) allocated++; else failed++;
+
+    rows.push({
+      process: "P" + (index + 1),
+      request,
+      status: result.success ? "Allocated (" + strategy + ")" : "Not Allocated (" + strategy + ")",
+      chosen: result.success ? result.chosen : "—",
+      remainder: result.success ? result.remainder : "—"
+    });
+  });
+
+  return makeSummary("Q-learning selector", rows, blocks, allocated, failed, searches);
+}
+
+function renderCard(result) {
+  const rows = result.rows.map(row => `
+    <tr>
+      <td>${row.process}</td>
+      <td>${format(row.request)}</td>
+      <td>${row.status}</td>
+      <td>${typeof row.chosen === "number" ? format(row.chosen) : row.chosen}</td>
+      <td>${typeof row.remainder === "number" ? format(row.remainder) : row.remainder}</td>
+    </tr>`).join("");
+
+  return `
+    <article class="result-card">
+      <h3>${result.name}</h3>
+      <div class="metrics">
+        <strong>Allocated:</strong> ${result.allocated}<br>
+        <strong>Failed:</strong> ${result.failed}<br>
+        <strong>Total free:</strong> ${format(result.totalFree)} KB<br>
+        <strong>Largest free block:</strong> ${format(result.largest)} KB<br>
+        <strong>Fragmentation indicator:</strong> ${format(result.fragmentation)} KB<br>
+        <strong>Search operations:</strong> ${result.searches}
+      </div>
+      <table>
+        <thead><tr><th>Process</th><th>Request KB</th><th>Status</th><th>Selected block KB</th><th>Remainder KB</th></tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+      <p class="note"><strong>Remaining blocks:</strong> ${result.freeBlocks.map(format).join(", ") || "None"} KB</p>
+    </article>`;
+}
+
+function format(number) {
+  return Number(number.toFixed(2)).toString();
+}
+
+function runAll() {
+  const message = document.getElementById("message");
+  message.textContent = "";
+  try {
+    const blocks = parseValues("blocks");
+    const processes = parseValues("processes");
+    const q = trainQLearning();
+
+    const results = [
+      runTraditional(blocks, processes, "First Fit"),
+      runTraditional(blocks, processes, "Best Fit"),
+      runTraditional(blocks, processes, "Worst Fit"),
+      runLearned(blocks, processes, q)
+    ];
+
+    document.getElementById("results").innerHTML = results.map(renderCard).join("");
+  } catch (error) {
+    message.textContent = error.message;
+  }
+}
+
+function resetInputs() {
+  document.getElementById("blocks").value = "100, 500, 200, 300, 600";
+  document.getElementById("processes").value = "212, 417, 112, 426";
+  document.getElementById("message").textContent = "";
+  document.getElementById("results").innerHTML =
+    '<p class="note">Enter your values and click “Compare All Algorithms”.</p>';
+}
+</script>
+</body>
+</html>
